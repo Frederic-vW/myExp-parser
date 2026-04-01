@@ -2,10 +2,10 @@
 <html>
 <head>
 <meta charset="UTF-8">
-<title>Batch PDF Teacher Satisfaction Extractor</title>
+<title>Batch PDF Teacher/Course Satisfaction Extractor</title>
 
 <!-- Load pdf.js (ES5-compatible) -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
+https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js
 
 <style>
 body { font-family: Arial, sans-serif; margin: 30px; }
@@ -18,9 +18,9 @@ th { background: #f0f0f0; }
 </head>
 
 <body>
-<h2>Extract Mean & Median for Teacher Satisfaction from UNSW PDF Reports</h2>
+<h2>Extract Mean & Median from UNSW MyExperience PDFs</h2>
 
-<p>Select a folder containing multiple UNSW evaluation PDFs:</p>
+<p>Select a folder containing multiple evaluation PDFs:</p>
 
 <input type="file" id="folderInput" webkitdirectory directory multiple>
 <button onclick="processFolder()">Process PDFs</button>
@@ -30,6 +30,7 @@ th { background: #f0f0f0; }
   <thead>
     <tr>
       <th>Filename</th>
+      <th>Document Type</th>
       <th>Mean</th>
       <th>Median</th>
       <th>Status</th>
@@ -39,27 +40,53 @@ th { background: #f0f0f0; }
 </table>
 
 <script>
-// Ensure pdf.js worker is set
 pdfjsLib.GlobalWorkerOptions.workerSrc =
   "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js";
 
-// Extract mean & median from one PDF
-async function extractStatsFromArrayBuffer(arrayBuffer) {
-    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-    let fullText = "";
 
-    for (let i = 1; i <= pdf.numPages; i++) {
-        const page = await pdf.getPage(i);
-        const content = await page.getTextContent();
-        fullText += content.items.map(it => it.str).join(" ") + "\n";
+/* ---------------------------------------------------------
+   Extract the correct block for either Teacher or Course
+----------------------------------------------------------*/
+function findRelevantBlock(fullText) {
+
+    // Teacher evaluation
+    const teacherPattern =
+      /This teacher:\s*([^]*?)Overall I was satisfied with the quality of this person's teaching([^]{0,2000})/;
+
+    // Course evaluation
+    const coursePattern =
+      /This course:\s*([^]*?)Overall I was satisfied with the quality of the course([^]{0,2000})/;
+
+    let match;
+
+    // Try teacher form first
+    match = fullText.match(teacherPattern);
+    if (match) {
+        return {
+            type: "Teacher",
+            block: match[2]
+        };
     }
 
-    // Find correct section
-    const anchor = /This teacher:\s*Frederic von Wegner([\s\S]{0,2000})/;
-    const blockMatch = fullText.match(anchor);
-    if (!blockMatch) return { mean: null, median: null, ok: false };
+    // Try course form
+    match = fullText.match(coursePattern);
+    if (match) {
+        return {
+            type: "Course",
+            block: match[2]
+        };
+    }
 
-    const block = blockMatch[1];
+    return { type: "Unknown", block: null };
+}
+
+
+/* ---------------------------------------------------------
+   Extract mean and median from the relevant block
+----------------------------------------------------------*/
+function extractStatsFromBlock(block) {
+    if (!block) return { mean: null, median: null, ok: false };
+
     const meanMatch = block.match(/Mean\s+([0-9]+\.[0-9]+)/);
     const medianMatch = block.match(/Median\s+([0-9]+\.[0-9]+)/);
 
@@ -70,7 +97,41 @@ async function extractStatsFromArrayBuffer(arrayBuffer) {
     };
 }
 
-// Process entire folder
+
+/* ---------------------------------------------------------
+   Extract all text from a PDF, return the satisfaction stats
+----------------------------------------------------------*/
+async function extractStatsFromArrayBuffer(arrayBuffer) {
+
+    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+    let fullText = "";
+
+    for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const content = await page.getTextContent();
+        fullText += content.items.map(it => it.str).join(" ") + "\n";
+    }
+
+    // Pick the correct block based on teacher/course detection
+    const { type, block } = findRelevantBlock(fullText);
+
+    if (!block) {
+        return {
+            type,
+            mean: null,
+            median: null,
+            ok: false
+        };
+    }
+
+    const stats = extractStatsFromBlock(block);
+    return { type, ...stats };
+}
+
+
+/* ---------------------------------------------------------
+   Process the folder recursively
+----------------------------------------------------------*/
 async function processFolder() {
     const input = document.getElementById("folderInput");
     const files = Array.from(input.files);
@@ -86,9 +147,12 @@ async function processFolder() {
         const row = document.createElement("tr");
         row.innerHTML = `
             <td>${file.name}</td>
+            <td>${stats.type}</td>
             <td>${stats.mean ?? "-"}</td>
             <td>${stats.median ?? "-"}</td>
-            <td class="${stats.ok ? "ok" : "err"}">${stats.ok ? "OK" : "Not found"}</td>
+            <td class="${stats.ok ? "ok" : "err"}">
+                ${stats.ok ? "OK" : "Not found"}
+            </td>
         `;
         resultsBody.appendChild(row);
     }
