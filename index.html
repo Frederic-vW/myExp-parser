@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Batch PDF Teacher Satisfaction Extractor</title>
+
+<!-- Load pdf.js (ES5-compatible) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
+
+<style>
+body { font-family: Arial, sans-serif; margin: 30px; }
+table { border-collapse: collapse; margin-top: 20px; width: 100%; }
+th, td { border: 1px solid #ccc; padding: 8px; text-align: center; }
+th { background: #f0f0f0; }
+.ok { color: green; font-weight: bold; }
+.err { color: red; font-weight: bold; }
+</style>
+</head>
+
+<body>
+<h2>Extract Mean & Median for Teacher Satisfaction from UNSW PDF Reports</h2>
+
+<p>Select a folder containing multiple UNSW evaluation PDFs:</p>
+
+<input type="file" id="folderInput" webkitdirectory directory multiple>
+<button onclick="processFolder()">Process PDFs</button>
+
+<h3>Results</h3>
+<table id="resultsTable">
+  <thead>
+    <tr>
+      <th>Filename</th>
+      <th>Mean</th>
+      <th>Median</th>
+      <th>Status</th>
+    </tr>
+  </thead>
+  <tbody id="resultsBody"></tbody>
+</table>
+
+<script>
+// Ensure pdf.js worker is set
+pdfjsLib.GlobalWorkerOptions.workerSrc =
+  "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js";
+
+// Extract mean & median from one PDF
+async function extractStatsFromArrayBuffer(arrayBuffer) {
+    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+    let fullText = "";
+
+    for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const content = await page.getTextContent();
+        fullText += content.items.map(it => it.str).join(" ") + "\n";
+    }
+
+    // Find correct section
+    const anchor = /This teacher:\s*Frederic von Wegner([\s\S]{0,2000})/;
+    const blockMatch = fullText.match(anchor);
+    if (!blockMatch) return { mean: null, median: null, ok: false };
+
+    const block = blockMatch[1];
+    const meanMatch = block.match(/Mean\s+([0-9]+\.[0-9]+)/);
+    const medianMatch = block.match(/Median\s+([0-9]+\.[0-9]+)/);
+
+    return {
+        mean: meanMatch ? meanMatch[1] : null,
+        median: medianMatch ? medianMatch[1] : null,
+        ok: !!(meanMatch && medianMatch)
+    };
+}
+
+// Process entire folder
+async function processFolder() {
+    const input = document.getElementById("folderInput");
+    const files = Array.from(input.files);
+    const resultsBody = document.getElementById("resultsBody");
+    resultsBody.innerHTML = "";
+
+    for (const file of files) {
+        if (!file.name.toLowerCase().endsWith(".pdf")) continue;
+
+        const arrayBuffer = await file.arrayBuffer();
+        const stats = await extractStatsFromArrayBuffer(arrayBuffer);
+
+        const row = document.createElement("tr");
+        row.innerHTML = `
+            <td>${file.name}</td>
+            <td>${stats.mean ?? "-"}</td>
+            <td>${stats.median ?? "-"}</td>
+            <td class="${stats.ok ? "ok" : "err"}">${stats.ok ? "OK" : "Not found"}</td>
+        `;
+        resultsBody.appendChild(row);
+    }
+}
+</script>
+
+</body>
+</html>
